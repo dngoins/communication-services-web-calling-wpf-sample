@@ -1,4 +1,4 @@
-const CommunicationIdentityClient = require("@azure/communication-administration").CommunicationIdentityClient;
+const CommunicationIdentityClient = require("@azure/communication-identity").CommunicationIdentityClient;
 const HtmlWebPackPlugin = require("html-webpack-plugin");
 const config = require("./config.json");
 
@@ -47,8 +47,8 @@ module.exports = {
         before: function(app, server, compiler) {
             app.get('/tokens/provisionUser', async (req, res) => {
                 try {
-                    communicationUserId = await communicationIdentityClient.createUser();
-                    const tokenResponse = await communicationIdentityClient.issueToken(communicationUserId, ["voip"]);
+                    communicationUserId = await communicationIdentityClient.createUser();                    
+                    const tokenResponse = await communicationIdentityClient.getToken(communicationUserId, ["voip"]);
                     res.json(tokenResponse);
                 } catch (error) {
                     console.log(error);

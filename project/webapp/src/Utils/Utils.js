@@ -1,13 +1,13 @@
-import { isCommunicationUser, isPhoneNumber, isCallingApplication } from '@azure/communication-common';
+import { isCommunicationUserIdentifier, isPhoneNumberIdentifier, isMicrosoftTeamsUserIdentifier } from '@azure/communication-common';
 
 export const utils = {
     getIdentifierText: (identifier) => {
-        if (isCommunicationUser(identifier)) {
+        if (isCommunicationUserIdentifier(identifier)) {
             return identifier.communicationUserId;
-        } else if (isPhoneNumber(identifier)) {
+        } else if (isPhoneNumberIdentifier(identifier)) {
             return identifier.phoneNumber;
-        } else if(isCallingApplication(identifier)) {
-            return identifier.callingApplicationId;
+        } else if(isMicrosoftTeamsUserIdentifier(identifier)) {
+            return identifier.microsoftTeamsUserId;
         } else {
             return 'Unknwon Identifier';
         }

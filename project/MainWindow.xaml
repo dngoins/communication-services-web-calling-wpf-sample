@@ -21,12 +21,12 @@
             Grid.Row="0"
             Grid.Column="0"
             Name = "webView1"
-            Source = "localhost:5000"/>
+            Source = "http://localhost:5000"/>
         
         <wv2:WebView2
             Grid.Row="0"
             Grid.Column="1"
             x:Name = "webView2"
-            Source = "localhost:5000"/>
+            Source = "http://localhost:5000"/>
     </Grid>
 </Window>

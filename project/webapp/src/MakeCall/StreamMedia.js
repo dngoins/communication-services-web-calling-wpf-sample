@@ -54,7 +54,10 @@ export default class StreamMedia extends React.Component {
                 </div>
             );
         } else {
-            return null;
+            return(
+                 <div className="py-3 ms-Grid-col ms-lg4 ms-sm-12">
+                    <h4 className="video-title">{this.id}</h4>
+                </div>);
         }
     }
 }

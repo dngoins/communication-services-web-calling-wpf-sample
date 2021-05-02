@@ -1,6 +1,22 @@
 import React from "react";
-import { CallClient, LocalVideoStream } from '@azure/communication-calling';
-import { AzureCommunicationUserCredential } from '@azure/communication-common';
+import { CallClient, LocalVideoStream, VideoStreamRenderer } from '@azure/communication-calling';
+import { AzureCommunicationTokenCredential } from '@azure/communication-common';
+import { CommunicationIdentityClient } from '@azure/communication-identity';
+
+
+const config = require("../../config.json");
+
+if(!config || !config.connectionString || config.connectionString.indexOf('endpoint=') === -1)
+{
+    throw new Error("Update `config.json` with connection string");
+}
+
+const communicationIdentityClient = new  CommunicationIdentityClient(config.connectionString);
+
+let localVideoStream;
+let rendererLocal;
+let rendererRemote;
+
 import {
     PrimaryButton,
     TextField,
@@ -9,6 +25,7 @@ import {
 } from 'office-ui-fabric-react'
 import { Icon } from '@fluentui/react/lib/Icon';
 import CallCard from '../MakeCall/CallCard'
+
 import { utils } from '../Utils/Utils';
 
 export default class MakeCall extends React.Component {
@@ -18,6 +35,7 @@ export default class MakeCall extends React.Component {
         this.callAgent = null;
         this.deviceManager = null;
         this.destinationUserIds = null;
+        this.placeCallOptions = null;
 
         this.state = {
             loggedIn: false,
@@ -25,17 +43,44 @@ export default class MakeCall extends React.Component {
         };
     }
 
+    async localVideoView() {
+        rendererLocal = new VideoStreamRenderer(localVideoStream);
+        const view = await rendererLocal.createView();
+        document.getElementById("myVideo").appendChild(view.target);
+        console.log('localVideoView success');
+      }
+      
+      async remoteVideoView(remoteVideoStream) {
+        rendererRemote = new VideoStreamRenderer(remoteVideoStream);
+        const view = await rendererRemote.createView();
+        document.getElementById("remoteVideo").appendChild(view.target);
+        console.log('removeVideoView success');
+      }
+
     async componentDidMount() {
         try {
-            let response = await fetch('/tokens/provisionUser');
-            this.userDetails = await response.json();
-            this.setState({ id: utils.getIdentifierText(this.userDetails.user) });
-            const tokenCredential = new AzureCommunicationUserCredential(this.userDetails.token);
+
+            // Instantiate the identity client
+            let identityResponse = await communicationIdentityClient.createUser();
+            console.log(`\nCreated an identity with ID: ${identityResponse.communicationUserId}`);
+           // my_comm_id.innerHTML = `<div><p>My Contact Id:</p><p>${identityResponse.communicationUserId}</p></div>`;
+
+            let tokenResponse = await communicationIdentityClient.getToken(identityResponse, ["voip"]);
+            const { token, expiresOn } = tokenResponse;
+            console.log(`\nIssued an access token with 'voip' scope that expires at ${expiresOn}:`);
+            console.log(token);
+
+            const tokenCredential = new AzureCommunicationTokenCredential(token);
+
+            this.setState({ id: identityResponse.communicationUserId });
+
             this.callClient = new CallClient();
-            this.callAgent = await this.callClient.createCallAgent(tokenCredential);
+            this.callAgent = await this.callClient.createCallAgent(tokenCredential, { displayName: 'optional ACS user name' });
+
             this.deviceManager = await this.callClient.getDeviceManager();
             await this.deviceManager.askDevicePermission(true, true);
             this.callAgent.on('callsUpdated', e => {
+
                 console.log(`callsUpdated, added=${e.added}, removed=${e.removed}`);
 
                 e.added.forEach(call => {
@@ -43,25 +88,48 @@ export default class MakeCall extends React.Component {
                         call.reject();
                         return;
                     }
-                    this.setState({ call: call, callEndReason: undefined })
+                    this.setState({ call: call, callEndReason: undefined, callState: call.state })
                 });
 
                 e.removed.forEach(call => {
                     if (this.state.call && this.state.call === call) {
                         this.setState({
                             call: null,
-                            callEndReason: this.state.call.callEndReason
+                            callEndReason: this.state.call.callEndReason,
+                            callState: call.state
                         });
+
                     }
                 });
+
+                if (e.removed)
+                {
+                    rendererLocal = null;
+                    document.getElementById("myVideo").innerHTML="";
+                }
+
             });
+
+            this.callAgent.on('incomingCall', async e => {
+                
+                this.setState ({ call: e.incomingCall, dir: 'Incoming' });
+               
+                console.log(`Incoming call: ${this.state.call}`);
+                var callInfo = this.state.call.info;
+
+                // Get information about caller
+                var callerInfo = this.state.call.callerInfo
+                console.log(`call info: ${callInfo} caller info: ${callerInfo}`);
+
+              });
+            
             this.setState({ loggedIn: true });
         } catch (e) {
             console.error(e);
         }
     }
 
-    placeCall = () => {
+    placeCall = async () => {
         try {
             let identitiesToCall = [];
             const userIdsArray = this.destinationUserIds.value.split(',');
@@ -76,36 +144,96 @@ export default class MakeCall extends React.Component {
                 }
             });
 
-            const speakerDevice = this.deviceManager.getSpeakerList()[0];
+            const speakers = await this.deviceManager.getSpeakers();
+            const speakerDevice = speakers[0];
             if(!speakerDevice || speakerDevice.id === 'speaker:') {
                 this.setShowSpeakerNotFoundWarning(true);
             } else if(speakerDevice) {
-                this.deviceManager.setSpeaker(speakerDevice);
+                await this.deviceManager.selectSpeaker(speakerDevice);
             }
     
-            const microphoneDevice = this.deviceManager.getMicrophoneList()[0];
+            const mics  = await this.deviceManager.getMicrophones();
+            const microphoneDevice = mics[0];
+
             if(!microphoneDevice || microphoneDevice.id === 'microphone:') {
                 this.setShowMicrophoneNotFoundWarning(true);
             } else {
-                this.deviceManager.setMicrophone(microphoneDevice);
+                await this.deviceManager.selectMicrophone(microphoneDevice);
+            }
+            
+            this.placeCallOptions = { localVideoStreams: undefined};
+            const cams = await this.deviceManager.getCameras();
+            const camera = cams[1];
+            
+            if(!camera)
+            {
+                this.setShowCameraNotFoundWarning(true);                
+            }
+            else
+            { 
+                console.log(`Placing Call: ${camera.name}`);
+               
+                localVideoStream = new LocalVideoStream(camera);
+                this.placeCallOptions = { localVideoStreams: [localVideoStream]};
+                await this.localVideoView();
+               
             }
 
             let callOptions = {
-                videoOptions: {
-                    localVideoStreams: undefined
-                },
+                videoOptions: this.placeCallOptions,
                 audioOptions: {
                     muted: false
                 }
             };
 
-            this.callAgent.call(identitiesToCall, callOptions);
+            let call = await this.callAgent.startCall(identitiesToCall, callOptions);
+            await this.subscribeToRemoteParticipantInCall(call);      
+            this.setState({call: call, callState: call.state});
 
         } catch (e) {
             console.log('Failed to place a call', e);
         }
     };
 
+    async handleVideoStream(remoteVideoStream) {
+        remoteVideoStream.on('isAvailableChanged', async () => {
+          if (remoteVideoStream.isAvailable) {
+              await this.remoteVideoView(remoteVideoStream);
+          } else {
+              rendererRemote.dispose();
+          }
+        });
+        if (remoteVideoStream.isAvailable) {
+          await this.remoteVideoView(remoteVideoStream);
+        }
+      }
+
+    async subscribeToParticipantVideoStreams(remoteParticipant) {
+        remoteParticipant.on('videoStreamsUpdated', e => {
+          e.added.forEach(v => {
+            this.handleVideoStream(v);
+          })
+        });
+        remoteParticipant.videoStreams.forEach(v => {
+          this.handleVideoStream(v);
+        });
+        console.log('Subscribe To Participant video success');
+      }
+      
+    async subscribeToRemoteParticipantInCall(callInstance) {
+        callInstance.on('remoteParticipantsUpdated', e => {
+          e.added.forEach( p => {
+            this.subscribeToParticipantVideoStreams(p);
+          })
+        }); 
+        callInstance.remoteParticipants.forEach( p => {
+          this.subscribeToParticipantVideoStreams(p);
+        });
+        console.log('subscribe to remote participant success');
+
+      }
+      
+    
     setShowCameraNotFoundWarning(show) {
         this.setState({showCameraNotFoundWarning: show});
     }
@@ -117,6 +245,7 @@ export default class MakeCall extends React.Component {
     setShowMicrophoneNotFoundWarning(show) {
         this.setState({showMicrophoneNotFoundWarning: show});
     }
+    
 
     render() {
         return (
@@ -185,12 +314,16 @@ export default class MakeCall extends React.Component {
                     }
                     {
                         this.state.call && this.state.loggedIn && 
-                            <CallCard call={this.state.call}
+                            <div>
+                                <CallCard call={this.state.call} dir={this.state.dir}
                                         deviceManager={this.deviceManager}
                                         onShowCameraNotFoundWarning={() => {this.setShowCameraNotFoundWarning}}
                                         onShowSpeakerNotFoundWarning={() => {this.setShowSpeakerNotFoundWarning}}
                                         onShowMicrophoneNotFoundWarning={() => {this.setShowMicrophoneNotFoundWarning}}/>
+                            
+                            </div>
                     }
+                    
                 </div>
             </div>
         );

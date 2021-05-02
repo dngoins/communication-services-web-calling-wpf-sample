@@ -1,12 +1,19 @@
 import React from "react";
 import { DefaultButton } from 'office-ui-fabric-react'
 import { Icon } from '@fluentui/react/lib/Icon';
+import { CallClient, LocalVideoStream } from '@azure/communication-calling';
+import StreamMedia from '../MakeCall/StreamMedia'
+
 export default class CallCard extends React.Component {
     constructor(props) {
         super(props);
         this.mutePromise = undefined;
+        this.placeCallOptions = null;
+        this.localVideo = null;
+
         this.state = {
             call: props.call,
+            dir: props.dir,
             deviceManager: props.deviceManager,
             callState: props.call.state,
             callId: props.call.id,
@@ -14,37 +21,79 @@ export default class CallCard extends React.Component {
         };
     }
 
-    componentWillMount() {
+    onCallStateChanged() {
+        console.log('stateChanged', this.state.call.state);
+        this.setState({callState: this.state.call.state});
+        console.log('stateChangedDirection', this.state.call.direction);
+        this.state.call.on('stateChanged', this.onCallStateChanged);
+        this.state.call.on('idChanged', () => {
+            this.setState({ callId: this.state.call.id});
+            console.log( this.state.call.id)
+        });
+    }
+
+    componentDidMount() {
         const onCallStateChanged = () => {
-            console.log('callStateChanged', this.state.call.state);
+            console.log('stateChanged', this.state.call.state);
             this.setState({callState: this.state.call.state});
+            console.log('stateChangedDirection', this.state.call.direction);
         }
         onCallStateChanged();
-        this.state.call.on('callStateChanged', onCallStateChanged);
-        this.state.call.on('callIdChanged', () => {
+        this.state.call.on('stateChanged', onCallStateChanged);
+        this.state.call.on('idChanged', () => {
             this.setState({ callId: this.state.call.id});
+            console.log( this.state.call.id)
         });
     }
 
     async handleAcceptCall() {
 
-        const speakerDevice = this.state.deviceManager.getSpeakerList()[0];
+        const speakers = await this.state.deviceManager.getSpeakers();
+        const speakerDevice = speakers[0];
         if(!speakerDevice || speakerDevice.id === 'speaker:') {
             this.props.onShowSpeakerNotFoundWarning(true);
         } else if(speakerDevice) {
-            this.state.deviceManager.setSpeaker(speakerDevice);
+            await this.state.deviceManager.selectSpeaker(speakerDevice);
         }
 
-        const microphoneDevice = this.state.deviceManager.getMicrophoneList()[0];
+        const mics = this.state.deviceManager.getMicrophones();
+        const microphoneDevice = mics[0];
         if(!microphoneDevice || microphoneDevice.id === 'microphone:') {
             this.props.onShowMicrophoneNotFoundWarning(true);
         } else {
-            this.state.deviceManager.setMicrophone(microphoneDevice);
+            await this.state.deviceManager.selectMicrophone(microphoneDevice);
         }
 
-        this.state.call.accept({
-            videoOptions: { localVideoStreams: undefined }
-        }).catch((e) => console.error(e));
+        this.placeCallOptions = { localVideoStreams: undefined};
+        const cameras = this.state.deviceManager.getCameras();
+        const camera = cameras[3];
+        //let localVideoStream = null;
+        
+        if(!camera)
+        {
+            // this.state.deviceManager.showCameraNotFoundWarning(true);
+            this.props.onShowCameraNotFoundWarning(true);
+        }
+        else
+        {        
+           const localVideoStream = new LocalVideoStream(camera);        
+           this.placeCallOptions = { localVideoStreams: [localVideoStream]};
+           console.log(`CallCard: ${camera.name}`);
+        }
+            
+        const call = await this.state.call.accept({
+            videoOptions: this.placeCallOptions
+        });
+        
+        //.catch((e) => console.error(e));
+        
+        this.setState( {call: call, callState: "Connected", dir: ""});
+        console.log(`Handle Accept Call: ${this.state.call}`);
+        this.onCallStateChanged();
+        this.setState( {call: call, callState: "Connected"});
+        
+        // await this.subscribeToRemoteParticipantInCall(addedCall);      
+        
     }
 
     getIncomingActionContent() {
@@ -86,6 +135,7 @@ export default class CallCard extends React.Component {
                 <div className="ms-Grid-row">
                     <div className="ms-Grid-col ms-lg6">
                         <h2>{this.state.callState !== 'Connected' ? `${this.state.callState}...` : `Connected`}</h2>
+                        
                     </div>
                     <div className="ms-Grid-col ms-lg6 text-right">
                         {
@@ -101,7 +151,7 @@ export default class CallCard extends React.Component {
                                 this.state.callState !== 'Connected' &&
                                 <div className="custom-row">
                                     <div className="ringing-loader mb-4"></div>
-                                </div>
+                                </div>                                
                             }
                             <div className="text-center">
                                     <span className="in-call-button"
@@ -124,9 +174,10 @@ export default class CallCard extends React.Component {
                             </div>
                             <div className="text-center">
                             {
-                                this.state.callState === 'Incoming' ? this.getIncomingActionContent() : undefined
+                                this.state.dir === 'Incoming' ? this.getIncomingActionContent() : undefined
                             }
                             </div>
+                            
                         </div>
                     </div>
                 </div>
