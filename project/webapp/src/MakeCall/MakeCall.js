@@ -13,9 +13,6 @@ if(!config || !config.connectionString || config.connectionString.indexOf('endpo
 
 const communicationIdentityClient = new  CommunicationIdentityClient(config.connectionString);
 
-let localVideoStream;
-let rendererLocal;
-let rendererRemote;
 
 import {
     PrimaryButton,
@@ -36,6 +33,11 @@ export default class MakeCall extends React.Component {
         this.deviceManager = null;
         this.destinationUserIds = null;
         this.placeCallOptions = null;
+        this.localVideoStream = null;
+        this.rendererLocal = null;
+        this.rendererRemote = null;
+        this.call = null;
+        this.callCard = { makeCall: this, callCard: true };
 
         this.state = {
             loggedIn: false,
@@ -44,18 +46,58 @@ export default class MakeCall extends React.Component {
     }
 
     async localVideoView() {
-        rendererLocal = new VideoStreamRenderer(localVideoStream);
-        const view = await rendererLocal.createView();
+        this.rendererLocal = new VideoStreamRenderer(this.localVideoStream);
+        const view = await this.rendererLocal.createView();
         document.getElementById("myVideo").appendChild(view.target);
         console.log('localVideoView success');
       }
       
       async remoteVideoView(remoteVideoStream) {
-        rendererRemote = new VideoStreamRenderer(remoteVideoStream);
-        const view = await rendererRemote.createView();
+        this.rendererRemote = new VideoStreamRenderer(remoteVideoStream);
+        const view = await this.rendererRemote.createView();
         document.getElementById("remoteVideo").appendChild(view.target);
         console.log('removeVideoView success');
       }
+
+      async handleVideoStream(remoteVideoStream) {
+        remoteVideoStream.on('isAvailableChanged', async () => {
+          if (remoteVideoStream.isAvailable) {
+              await this.remoteVideoView(remoteVideoStream);
+          } else {
+              this.rendererRemote.dispose();
+          }
+        });
+        if (remoteVideoStream.isAvailable) {
+          await this.remoteVideoView(remoteVideoStream);
+        }
+      }
+
+    async subscribeToParticipantVideoStreams(remoteParticipant) {
+        remoteParticipant.on('videoStreamsUpdated', e => {
+          e.added.forEach(v => {
+            this.handleVideoStream(v);
+          })
+        });
+        remoteParticipant.videoStreams.forEach(v => {
+          this.handleVideoStream(v);
+        });
+        
+        console.log('Subscribe To Participant video success');
+      }
+      
+    async subscribeToRemoteParticipantInCall(callInstance) {
+        callInstance.on('remoteParticipantsUpdated', e => {
+          e.added.forEach( p => {
+            this.subscribeToParticipantVideoStreams(p);
+          })
+        }); 
+        callInstance.remoteParticipants.forEach( p => {
+          this.subscribeToParticipantVideoStreams(p);
+        });
+        console.log('subscribe to remote participant success');
+
+      }
+
 
     async componentDidMount() {
         try {
@@ -100,13 +142,26 @@ export default class MakeCall extends React.Component {
                         });
 
                     }
+                    console.log("makecall::componentDidMount::callsUpdated:: remove foreach callstate:", call.state);
+                    if (call.state == "Disconnected")
+                    {
+                        if( this.rendererLocal)
+                            this.rendererLocal.dispose();
+                        
+                        if (this.rendererRemote)
+                            this.rendererRemote.dispose();
+                            
+                        this.localVideoStream = null;
+                        this.rendererLocal = null;
+                        this.rendererRemote = null;
+                        this.call = null;
+                                               
+                        //document.getElementById("myVideo").innerHTML = null;
+                        console.log("makecall::componentDidMount::callsUpdated::Cleared video objects");
+                        location.reload();
+                    }
                 });
-
-                if (e.removed)
-                {
-                    rendererLocal = null;
-                    document.getElementById("myVideo").innerHTML="";
-                }
+              
 
             });
 
@@ -127,7 +182,7 @@ export default class MakeCall extends React.Component {
         } catch (e) {
             console.error(e);
         }
-    }
+    } 
 
     placeCall = async () => {
         try {
@@ -163,7 +218,8 @@ export default class MakeCall extends React.Component {
             
             this.placeCallOptions = { localVideoStreams: undefined};
             const cams = await this.deviceManager.getCameras();
-            const camera = cams[1];
+            console.log('Make Call Cams: ', cams);
+            const camera = cams[3];
             
             if(!camera)
             {
@@ -173,8 +229,8 @@ export default class MakeCall extends React.Component {
             { 
                 console.log(`Placing Call: ${camera.name}`);
                
-                localVideoStream = new LocalVideoStream(camera);
-                this.placeCallOptions = { localVideoStreams: [localVideoStream]};
+                this.localVideoStream = new LocalVideoStream(camera);
+                this.placeCallOptions = { localVideoStreams: [this.localVideoStream]};
                 await this.localVideoView();
                
             }
@@ -186,52 +242,34 @@ export default class MakeCall extends React.Component {
                 }
             };
 
-            let call = await this.callAgent.startCall(identitiesToCall, callOptions);
-            await this.subscribeToRemoteParticipantInCall(call);      
-            this.setState({call: call, callState: call.state});
+            this.call = await this.callAgent.startCall(identitiesToCall, callOptions);
+            this.call.on("stateChanged", () => {
+                console.log('makecall::placecall::stateChanged', e);
+                const _callState = this.call.state;
+                
+                if(_callState === "Disconnected")
+                {
+                    if( this.rendererLocal)
+                        this.rendererLocal.dispose();
+                
+                    if (this.rendererRemote)
+                        this.rendererRemote.dispose();
+        
+                    this.localVideoStream = null;
+                    this.rendererLocal = null;
+                    this.rendererRemote = null;
+                }
+            });
+
+            //await this.subscribeToRemoteParticipantInCall(call);      
+            this.setState({call: this.call, callState: call.state});
 
         } catch (e) {
             console.log('Failed to place a call', e);
         }
     };
 
-    async handleVideoStream(remoteVideoStream) {
-        remoteVideoStream.on('isAvailableChanged', async () => {
-          if (remoteVideoStream.isAvailable) {
-              await this.remoteVideoView(remoteVideoStream);
-          } else {
-              rendererRemote.dispose();
-          }
-        });
-        if (remoteVideoStream.isAvailable) {
-          await this.remoteVideoView(remoteVideoStream);
-        }
-      }
-
-    async subscribeToParticipantVideoStreams(remoteParticipant) {
-        remoteParticipant.on('videoStreamsUpdated', e => {
-          e.added.forEach(v => {
-            this.handleVideoStream(v);
-          })
-        });
-        remoteParticipant.videoStreams.forEach(v => {
-          this.handleVideoStream(v);
-        });
-        console.log('Subscribe To Participant video success');
-      }
-      
-    async subscribeToRemoteParticipantInCall(callInstance) {
-        callInstance.on('remoteParticipantsUpdated', e => {
-          e.added.forEach( p => {
-            this.subscribeToParticipantVideoStreams(p);
-          })
-        }); 
-        callInstance.remoteParticipants.forEach( p => {
-          this.subscribeToParticipantVideoStreams(p);
-        });
-        console.log('subscribe to remote participant success');
-
-      }
+   
       
     
     setShowCameraNotFoundWarning(show) {
@@ -315,7 +353,7 @@ export default class MakeCall extends React.Component {
                     {
                         this.state.call && this.state.loggedIn && 
                             <div>
-                                <CallCard call={this.state.call} dir={this.state.dir}
+                                <CallCard call={this.state.call} dir={this.state.dir} 
                                         deviceManager={this.deviceManager}
                                         onShowCameraNotFoundWarning={() => {this.setShowCameraNotFoundWarning}}
                                         onShowSpeakerNotFoundWarning={() => {this.setShowSpeakerNotFoundWarning}}

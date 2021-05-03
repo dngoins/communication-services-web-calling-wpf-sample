@@ -1,8 +1,11 @@
 import React from "react";
 import { DefaultButton } from 'office-ui-fabric-react'
 import { Icon } from '@fluentui/react/lib/Icon';
-import { CallClient, LocalVideoStream } from '@azure/communication-calling';
+import { LocalVideoStream, VideoStreamRenderer } from '@azure/communication-calling';
 import StreamMedia from '../MakeCall/StreamMedia'
+
+    
+
 
 export default class CallCard extends React.Component {
     constructor(props) {
@@ -10,7 +13,11 @@ export default class CallCard extends React.Component {
         this.mutePromise = undefined;
         this.placeCallOptions = null;
         this.localVideo = null;
-
+        this.localVideoStream = null;
+        this.rendererLocal = null;
+        this.rendererRemote = null;
+        this.incomingCall = null;
+       
         this.state = {
             call: props.call,
             dir: props.dir,
@@ -19,10 +26,82 @@ export default class CallCard extends React.Component {
             callId: props.call.id,
             micOn: true
         };
+       
     }
+
+    async clearVideo()
+    {
+        if( this.rendererLocal)
+                this.rendererLocal.dispose();
+        
+            if (this.rendererRemote)
+                this.rendererRemote.dispose();
+
+            this.localVideoStream = null;
+            this.rendererLocal = null;
+            this.rendererRemote = null;
+            console.log("clearing Video");
+    }
+
+    async localVideoView() {
+        this.rendererLocal = new VideoStreamRenderer(this.localVideoStream);
+        const view = await this.rendererLocal.createView();
+        document.getElementById("myVideo").appendChild(view.target);
+        console.log('localVideoView success');
+      }
+      
+      async remoteVideoView(remoteVideoStream) {
+        this.rendererRemote = new VideoStreamRenderer(remoteVideoStream);
+        const view = await this.rendererRemote.createView();
+        document.getElementById("remoteVideo").appendChild(view.target);
+        console.log('removeVideoView success');
+      }
+
+      async handleVideoStream(remoteVideoStream) {
+        remoteVideoStream.on('isAvailableChanged', async () => {
+          if (remoteVideoStream.isAvailable) {
+              await this.remoteVideoView(remoteVideoStream);
+          } else {
+              if(this.renderRemote)
+                this.rendererRemote.dispose();
+          }
+        });
+        if (remoteVideoStream.isAvailable) {
+          await this.remoteVideoView(remoteVideoStream);
+        }
+      }
+
+    async subscribeToParticipantVideoStreams(remoteParticipant) {
+        remoteParticipant.on('videoStreamsUpdated', e => {
+          e.added.forEach(v => {
+            this.handleVideoStream(v);
+          })
+        });
+        remoteParticipant.videoStreams.forEach(v => {
+          this.handleVideoStream(v);
+        });
+        
+        console.log('Subscribe To Participant video success');
+      }
+      
+    async subscribeToRemoteParticipantInCall(callInstance) {
+        callInstance.on('remoteParticipantsUpdated', e => {
+          e.added.forEach( p => {
+            this.subscribeToParticipantVideoStreams(p);
+          })
+        }); 
+        callInstance.remoteParticipants.forEach( p => {
+          this.subscribeToParticipantVideoStreams(p);
+        });
+        console.log('subscribe to remote participant success');
+
+      }
 
     onCallStateChanged() {
         console.log('stateChanged', this.state.call.state);
+        const _callState = this.state.call.state;
+        const _dir = this.state.call.direction;
+
         this.setState({callState: this.state.call.state});
         console.log('stateChangedDirection', this.state.call.direction);
         this.state.call.on('stateChanged', this.onCallStateChanged);
@@ -30,19 +109,68 @@ export default class CallCard extends React.Component {
             this.setState({ callId: this.state.call.id});
             console.log( this.state.call.id)
         });
+
+        if ((_callState === "Connecting" ) && (_dir === "Incoming"))
+        {
+            console.log("changed to onCallStateChange - Connected");
+            //this.state.call.state = "Connected";
+            const addedCall = this.state.call;
+            this.subscribeToRemoteParticipantInCall(addedCall); 
+              
+        }
+
+        if(_callState === "Disconnected")
+        {
+            if( this.rendererLocal)
+                this.rendererLocal.dispose();
+        
+            if (this.rendererRemote)
+                this.rendererRemote.dispose();
+
+            this.localVideoStream = null;
+            this.rendererLocal = null;
+            this.rendererRemote = null;
+            this.clearVideo();
+
+            console.log("Disconnected - cleared out video");
+        }
     }
 
     componentDidMount() {
         const onCallStateChanged = () => {
-            console.log('stateChanged', this.state.call.state);
+            console.log('componentDidMount::stateChanged', this.state.call.state);
             this.setState({callState: this.state.call.state});
-            console.log('stateChangedDirection', this.state.call.direction);
+            console.log('componentDidMount::stateChangedDirection', this.state.call.direction);
+            const _callState = this.state.call.state;
+            if(_callState === "Connected")
+            {
+                console.log("componentDidMount::onCallStateChange - Connected");
+                const addedCall = this.state.call;
+                this.subscribeToRemoteParticipantInCall(addedCall); 
+                    
+            }
+
+            if(_callState === "Disconnected")
+            {
+                if( this.rendererLocal)
+                    this.rendererLocal.dispose();
+            
+                if (this.rendererRemote)
+                    this.rendererRemote.dispose();
+    
+                this.localVideoStream = null;
+                this.rendererLocal = null;
+                this.rendererRemote = null;
+                this.clearVideo();
+    
+                console.log("componentDidMount::onCallStateChange Disconnected - cleared out video");
+            }
         }
         onCallStateChanged();
         this.state.call.on('stateChanged', onCallStateChanged);
         this.state.call.on('idChanged', () => {
             this.setState({ callId: this.state.call.id});
-            console.log( this.state.call.id)
+            console.log( "comopnentDidMount:", this.state.call.id)
         });
     }
 
@@ -65,34 +193,37 @@ export default class CallCard extends React.Component {
         }
 
         this.placeCallOptions = { localVideoStreams: undefined};
-        const cameras = this.state.deviceManager.getCameras();
-        const camera = cameras[3];
+        const cameras =  await this.state.deviceManager.getCameras();
+        console.log(cameras);
+        const camera = cameras[0];
         //let localVideoStream = null;
         
         if(!camera)
         {
             // this.state.deviceManager.showCameraNotFoundWarning(true);
             this.props.onShowCameraNotFoundWarning(true);
+            console.log('could not find camera or it is in use');
         }
         else
         {        
-           const localVideoStream = new LocalVideoStream(camera);        
-           this.placeCallOptions = { localVideoStreams: [localVideoStream]};
-           console.log(`CallCard: ${camera.name}`);
+           this.localVideoStream = new LocalVideoStream(camera);        
+           this.placeCallOptions = { localVideoStreams: [this.localVideoStream]};
+           console.log(`handleAccecptCall - CallCard CameraName: ${camera.name}`);
+           await this.localVideoView();
         }
             
-        const call = await this.state.call.accept({
+        this.incomingCall = await this.state.call.accept({
             videoOptions: this.placeCallOptions
         });
         
+
         //.catch((e) => console.error(e));
-        
-        this.setState( {call: call, callState: "Connected", dir: ""});
+        this.incomingCall.on('stateChanged', this.onCallStateChanged);
+        this.setState( {call: this.incomingCall, callState: "Connected", dir: ""});
         console.log(`Handle Accept Call: ${this.state.call}`);
         this.onCallStateChanged();
-        this.setState( {call: call, callState: "Connected"});
-        
-        // await this.subscribeToRemoteParticipantInCall(addedCall);      
+        this.setState( {call: this.incomingCall, callState: "Connected"});
+        this.state.call.on('stateChanged', this.onCallStateChanged);
         
     }
 
@@ -168,7 +299,12 @@ export default class CallCard extends React.Component {
                                         }
                                     </span>
                                     <span className="in-call-button"
-                                        onClick={() => this.state.call.hangUp({forEveryone: false}).catch((e) => console.error(e))}>
+                                        onClick={
+                                            () => {
+                                                this.state.call.hangUp({forEveryone: false}).catch((e) => console.error(e));
+                                                this.clearVideo();
+                                            }                                            
+                                            }>
                                         <Icon iconName="DeclineCall"/>
                                     </span>
                             </div>
